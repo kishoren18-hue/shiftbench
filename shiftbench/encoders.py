@@ -118,9 +118,92 @@ class TinyEncoder(nn.Module):
         return self.proj(h.flatten(1)).numpy().astype(np.float32)
 
 
+class HFImageEncoder:
+    """Any Hugging Face image model, frozen, one vector per frame.
+
+    Uses the model's own image processor, then
+      get_image_features(...)   for CLIP / SigLIP-style models,
+      pooler_output             when the model has one,
+      mean of last_hidden_state otherwise (e.g. DINOv2 patch tokens + CLS).
+    """
+
+    def __init__(self, model_id: str, device: str | None = None, batch_size: int = 64):
+        from transformers import AutoImageProcessor, AutoModel
+
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.dtype = torch.float16 if self.device == "cuda" else torch.float32
+        self.proc = AutoImageProcessor.from_pretrained(model_id)
+        self.model = AutoModel.from_pretrained(model_id, torch_dtype=self.dtype).to(self.device).eval()
+        self.batch_size = batch_size
+        self.model_id = model_id
+        self._dim = None
+
+    @property
+    def dim(self):
+        return self._dim
+
+    @torch.no_grad()
+    def encode(self, frames) -> np.ndarray:
+        x = np.asarray(frames)
+        if x.ndim == 3:
+            x = x[None]
+        out = []
+        for i in range(0, len(x), self.batch_size):
+            px = self.proc(images=list(x[i:i + self.batch_size]), return_tensors="pt")["pixel_values"]
+            px = px.to(self.device, self.dtype)
+            if hasattr(self.model, "get_image_features"):
+                f = self.model.get_image_features(pixel_values=px)
+                f = getattr(f, "pooler_output", f)
+            else:
+                o = self.model(pixel_values=px)
+                f = o.pooler_output if getattr(o, "pooler_output", None) is not None else o.last_hidden_state.mean(1)
+            out.append(f.float().cpu())
+        z = torch.cat(out).numpy().astype(np.float32)
+        self._dim = z.shape[1]
+        return z
+
+
+class TorchvisionResNet:
+    """ImageNet ResNet-18, frozen, 512-d. The 'old-school' baseline."""
+
+    def __init__(self, device: str | None = None, batch_size: int = 64):
+        import torchvision
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        w = torchvision.models.ResNet18_Weights.IMAGENET1K_V1
+        m = torchvision.models.resnet18(weights=w)
+        m.fc = nn.Identity()
+        self.model = m.eval().to(self.device)
+        self.batch_size = batch_size
+
+    @property
+    def dim(self):
+        return 512
+
+    @torch.no_grad()
+    def encode(self, frames) -> np.ndarray:
+        x = resize_center_crop(to_float_chw(frames), 224)
+        x = (x - IMAGENET_MEAN) / IMAGENET_STD
+        return torch.cat([self.model(x[i:i + self.batch_size].to(self.device)).cpu()
+                          for i in range(0, len(x), self.batch_size)]).numpy().astype(np.float32)
+
+
+# name -> (constructor, kwargs). Video-native (V-JEPA 2), self-supervised image (DINOv2),
+# language-aligned image (SigLIP 2, CLIP), supervised ImageNet (ResNet-18).
+ENCODERS = {
+    "vjepa2": lambda **k: VJEPA2Encoder(**k),
+    "vjepa2_grid": lambda **k: VJEPA2Encoder(pool="grid2", **k),
+    "dinov2_s": lambda **k: HFImageEncoder("facebook/dinov2-small", **k),
+    "dinov2_b": lambda **k: HFImageEncoder("facebook/dinov2-base", **k),
+    "siglip2_b": lambda **k: HFImageEncoder("google/siglip2-base-patch16-224", **k),
+    "clip_b32": lambda **k: HFImageEncoder("openai/clip-vit-base-patch32", **k),
+    "resnet18": lambda **k: TorchvisionResNet(**k),
+    "tiny": lambda **k: TinyEncoder(**k),
+}
+
+
 def make_encoder(name: str = "vjepa2", **kw):
-    if name == "vjepa2":
-        return VJEPA2Encoder(**kw)
-    if name == "tiny":
-        return TinyEncoder(**kw)
-    raise ValueError(f"unknown encoder {name!r}")
+    if name in ENCODERS:
+        return ENCODERS[name](**kw)
+    if "/" in name:                                     # any HF model id
+        return HFImageEncoder(name, **kw)
+    raise ValueError(f"unknown encoder {name!r}; known: {sorted(ENCODERS)}")

@@ -57,31 +57,53 @@ def _first_recovery(alarmed, success, alpha, win=10):
 
 def evaluate(det, episodes_by_condition: dict, nominal_cal, k: int = 20, n_orders: int = 200,
              seed: int = 0, adaptive_variants=DEFAULT_ADAPTIVE) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    alpha = det.cfg.alpha
+    """Score episodes with a Detector, then run `evaluate_scores`."""
     ref = det.cfg.ref_steps or 4
-    ref_cal = np.array([det.episode_score(e, ref_steps=ref) for e in nominal_cal if e.success])
-    tau_ref = conformal_cutoff(ref_cal, alpha)
-    ads = {name: (det.default_adaptive(eta_mult=m, log=lg), lg) for name, m, lg in adaptive_variants}
+    cal_raw = np.array([det.episode_score(e, ref_steps=None) for e in nominal_cal if e.success])
+    cal_ref = np.array([det.episode_score(e, ref_steps=ref) for e in nominal_cal if e.success])
+    conds = {}
+    for cond, eps in episodes_by_condition.items():
+        conds[cond] = (np.array([det.episode_score(e, ref_steps=None) for e in eps]),
+                       np.array([det.episode_score(e, ref_steps=ref) for e in eps]),
+                       np.array([e.success for e in eps]))
+    return evaluate_scores(conds, cal_raw, cal_ref, det.cfg.alpha, k=k, n_orders=n_orders, seed=seed,
+                           adaptive_variants=adaptive_variants)
+
+
+def evaluate_scores(conditions: dict, cal_raw, cal_ref, alpha: float, k: int = 20, n_orders: int = 200,
+                    seed: int = 0, adaptive_variants=DEFAULT_ADAPTIVE) -> pd.DataFrame:
+    """The benchmark on precomputed episode scores.
+
+    conditions: {name: (raw_scores, self_ref_scores, success)} in recording order
+    cal_raw / cal_ref: episode scores of the nominal successful calibration episodes
+    """
+    from .adaptive import adaptive_from_calibration
+
+    rng = np.random.default_rng(seed)
+    cal_raw = np.asarray(cal_raw, float)
+    tau_fixed = conformal_cutoff(cal_raw, alpha)
+    tau_ref = conformal_cutoff(np.asarray(cal_ref, float), alpha)
+    ads = {name: (adaptive_from_calibration(cal_raw, tau_fixed, alpha, eta_mult=m, log=lg), lg)
+           for name, m, lg in adaptive_variants}
 
     rows = []
-    for cond, eps in episodes_by_condition.items():
-        s_raw = np.array([det.episode_score(e, ref_steps=None) for e in eps])
-        s_ref = np.array([det.episode_score(e, ref_steps=ref) for e in eps])
-        y = np.array([e.success for e in eps])
-        n = len(eps)
+    for cond, (s_raw, s_ref, y) in conditions.items():
+        s_raw, s_ref, y = np.asarray(s_raw, float), np.asarray(s_ref, float), np.asarray(y, bool)
+        n = len(y)
         if n <= k:
             raise ValueError(f"{cond}: need more than k={k} episodes, have {n}")
         base = dict(condition=cond, n_eval=n - k, n_eval_success=int(y[k:].sum()),
+                    n_eval_fail=int((~y[k:]).sum()),
                     auroc_raw=auroc(s_raw[k:], ~y[k:]), auroc_ref=auroc(s_ref[k:], ~y[k:]),
-                    median_score_success=float(np.median(s_raw[y])) if y.any() else np.nan)
+                    median_score_success=float(np.median(s_raw[y])) if y.any() else np.nan,
+                    tau_fixed=tau_fixed)
 
         def add(method, far, detr, fa=None, ns=None, **extra):
             lo, hi = wilson(fa, ns) if ns else (np.nan, np.nan)
             rows.append({**base, "method": method, "false_alarm": far, "fa_lo": lo, "fa_hi": hi,
                          "detection": detr, **extra})
 
-        far, detr, fa, ns = _rates(s_raw[k:], y[k:], det.tau)
+        far, detr, fa, ns = _rates(s_raw[k:], y[k:], tau_fixed)
         add("fixed", far, detr, fa, ns)
         far, detr, fa, ns = _rates(s_ref[k:], y[k:], tau_ref)
         add("self_ref", far, detr, fa, ns)

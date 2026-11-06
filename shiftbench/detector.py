@@ -36,7 +36,9 @@ class Detector:
 
     # ---------------------------------------------------------- offline
     def fit(self, train: list[Episode], cal: list[Episode], verbose=True, seed=0):
+        import torch
         c = self.cfg
+        torch.manual_seed(seed)                    # seeds the weight init too
         self.wm = WorldModel.for_episodes(train, context=c.context, horizon=c.horizon,
                                           hidden=c.hidden, layers=c.layers)
         self.wm.fit(train, epochs=c.epochs, verbose=verbose, seed=seed)
