@@ -59,6 +59,8 @@ else:   # calmest successful test rollouts under the nominal image: the fairest 
     tr = pd.read_parquet(a.traces)
     tr = tr[(tr.encoder == a.encoder) & (tr.variant == "full") & (tr.experiment == "B") & (tr["shift"] == "nominal") & tr.success]
     eps = tr.sort_values("score").episode_index.head(a.n).astype(int).tolist()
+if not LOCAL:      # make sure the chosen episodes' data and video files are on disk
+    ds = V3Dataset.download(a.repo_id, a.data_dir, episodes=eps, cameras=(a.camera,))
 
 W_IMG, W_PLOT, H = 640, 420, 360
 
