@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot_robot_shiftbench"
+version = "0.1.0"
+description = "LeRobot plugin: SO-101 follower that stops itself when the ShiftBench world model is surprised"
+requires-python = ">=3.10"
+dependencies = ["lerobot>=0.7", "shiftbench"]
+
+[tool.setuptools]
+packages = ["lerobot_robot_shiftbench"]

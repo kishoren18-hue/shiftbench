@@ -1,0 +1,55 @@
+# ShiftBench shift conditions for one SO-101 pick-and-place cell.
+# Every condition must be reproducible by someone else from this file plus the
+# photos in docs/setup_photos/. Measure, don't eyeball: tape marks, a protractor,
+# a lux reading from a phone app, the bulb's brightness % in its app.
+#
+# `name` is what you pass to shiftbench-label --condition; `level` is --level.
+# Change ONE thing per condition. Everything not listed stays at nominal.
+
+task: "Put the red cube in the bowl"
+success_rule: >
+  At the end of the episode the cube is fully inside the bowl, the gripper is
+  open, and nothing was knocked off the mat. Anything else is a failure.
+  Decide this before recording and never change it mid-dataset.
+episode_seconds: 20
+reset_seconds: 15
+
+nominal:
+  lamp: "clamp lamp at mark L0, smart bulb 80% brightness, 4000 K"
+  ambient: "blinds closed, room lights off"          # daylight is an uncontrolled shift
+  camera: "front camera on tripod at mark C0, tilt 30 deg down"
+  table: "grey felt mat"
+  object: "40 mm red foam cube; bowl at mark B0"
+  record_lux_at_cube: true
+
+conditions:
+  - name: light_dim
+    what: "smart bulb brightness"
+    levels: {1: "40%", 2: "15%"}
+  - name: light_warm
+    what: "smart bulb colour temperature, brightness unchanged"
+    levels: {1: "2700 K"}
+  - name: light_side
+    what: "clamp lamp moved; bulb settings unchanged"
+    levels: {1: "mark L1, 45 deg to the left of L0", 2: "mark L2, behind the arm (backlit)"}
+  - name: cam_pan
+    what: "front camera rotated about its vertical axis on the tripod"
+    levels: {1: "5 deg", 2: "15 deg"}
+  - name: cam_shift
+    what: "tripod moved sideways, same aim point"
+    levels: {1: "5 cm", 2: "15 cm"}
+  - name: table
+    what: "mat swapped"
+    levels: {1: "blue felt", 2: "wood-grain contact paper"}
+  - name: distractor
+    what: "objects that are not part of the task placed on the mat"
+    levels: {1: "one pen at mark D1", 2: "pen, mug and phone at D1-D3"}
+  - name: new_object
+    what: "the object to pick (bowl unchanged)"
+    levels: {1: "40 mm blue foam cube", 2: "small plastic toy of similar size", 3: "glue stick"}
+
+counts:
+  nominal_train: 50          # policy demos are separate; these are POLICY rollouts in shadow mode
+  nominal_calibration: 50
+  nominal_test_blocks: 3     # 20 nominal rollouts at the start, middle and end, to measure drift over time
+  per_condition_level: 40
