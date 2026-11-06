@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SteadyHand 2: a hand that looks before it grabs</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<header class="hero"><div class="wrap">
+  <p class="kicker">Kishore Nuthalapati · prosthetics × calibration</p>
+  <h1>SteadyHand 2: a hand that looks before it grabs</h1>
+  <p class="lede">A wrist camera guesses which grip the object affords. Muscle signals (EMG) say <i>when</i> to grab and <i>which</i> grip.
+  The hand moves only when both agree with enough confidence; otherwise it holds still. The misfire promise comes from
+  <a href="https://github.com/kishoren18-hue/steadyhand">SteadyHand</a>'s conformal and adaptive cutoffs.</p>
+  <div class="links"><a class="btn" href="https://github.com/kishoren18-hue/steadyhand2">Code (GitHub)</a><a class="btn ghost" href="index.html">← ShiftBench</a></div>
+</div></header>
+<main class="wrap">
+<section><h2>Try it: shift the electrodes, dim the light</h2>
+<p class="note">Simulated users (not people). Cutoffs are set on clean data to a 5% misfire target, then the signals degrade.
+SteadyHand 1 measured the real version of the EMG failure: 46% misfires at LibEMG's 0.90 cutoff after a 45° electrode shift.</p>
+<div class="controls">
+  <label>EMG confidently wrong <input id="es" type="range" min="0" max="0.5" step="0.05" value="0.2"><span id="esv"></span></label>
+  <label>Camera darkness <input id="vd" type="range" min="0" max="0.9" step="0.05" value="0"><span id="vdv"></span></label>
+  <label>Unfamiliar objects <input id="vn" type="range" min="0" max="0.5" step="0.05" value="0"><span id="vnv"></span></label>
+</div>
+<div id="out" class="stats"></div>
+<p class="note">Misfire = the hand moved when the user didn't want to, or with the wrong grip. Correct grabs = share of intended grabs executed with the right grip.</p>
+</section>
+<section><h2>Why agreement helps</h2><p>One signal going confidently wrong can't move the hand by itself, because the other has to agree. The price: when either signal is weak, the hand moves less often. The paper's job is to measure that trade with real wrist video and real EMG, at a stated misfire rate.</p></section>
+</main>
+<footer class="wrap"><p>Kishore Nuthalapati · <a href="https://github.com/kishoren18-hue">GitHub</a></p></footer>
+<script>
+(() => {
+  const $ = id => document.getElementById(id); const K = 4;
+  let seed = 3; const rand = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+  const randn = () => { let u = 0; while (!u) u = rand(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand()); };
+  const softmax = a => { const m = Math.max(...a), e = a.map(x => Math.exp(x - m)), s = e.reduce((p, q) => p + q); return e.map(x => x / s); };
+  function sample(n, es, vd, vn) {
+    const out = []; let y = 0, left = 0;
+    for (let i = 0; i < n; i++) {
+      if (!left) { left = 10 + Math.floor(rand() * 30); y = rand() < 0.6 ? 0 : 1 + Math.floor(rand() * K); }
+      left--; const aff = y || 1 + Math.floor(rand() * K); const sk = 3.2;
+      let le = Array.from({ length: K + 1 }, randn); 
+      if (rand() < es) { le = Array.from({ length: K + 1 }, randn); le[(y + 1 + Math.floor(rand() * K)) % (K + 1)] += sk + 1.5; } else le[y] += sk;
+      let lv = Array.from({ length: K }, randn);
+      if (rand() < vn) lv[(aff - 1 + 1 + Math.floor(rand() * (K - 1))) % K] += 4.5; else lv[aff - 1] += Math.max(3.5 * (1 - vd), 0.1);
+      out.push({ y, pe: softmax(le), pv: softmax(lv) });
+    }
+    return out;
+  }
+  const argmax = a => a.indexOf(Math.max(...a));
+  function decide(d, mode) {
+    const ge = argmax(d.pe), go = 1 - d.pe[0];
+    if (mode === "emg") return { g: ge, c: ge ? Math.max(...d.pe) : 0 };
+    const prod = d.pv.map((v, j) => v * d.pe[j + 1]), s = prod.reduce((a, b) => a + b), q = prod.map(x => x / s), g = argmax(q) + 1;
+    const ok = ge === g && argmax(d.pv) + 1 === g; return { g: ok ? g : 0, c: ok ? go * q[g - 1] : 0 };
+  }
+  function cutoff(data, mode, target) {
+    const ds = data.map(d => ({ ...decide(d, mode), y: d.y })).filter(x => x.g);
+    const cs = [...new Set(ds.map(x => x.c))].sort((a, b) => a - b);
+    for (const t of [0, ...cs]) { const m = ds.filter(x => x.c > t && x.g !== x.y).length / data.length; if (m <= target) return t; }
+    return 1;
+  }
+  seed = 3; const clean = sample(6000, 0, 0, 0);
+  const cut = { emg: cutoff(clean, "emg", 0.05), agree: cutoff(clean, "agree", 0.05) };
+  function run() {
+    const es = +$("es").value, vd = +$("vd").value, vn = +$("vn").value;
+    $("esv").textContent = (es * 100).toFixed(0) + "%"; $("vdv").textContent = (vd * 100).toFixed(0) + "%"; $("vnv").textContent = (vn * 100).toFixed(0) + "%";
+    seed = 11; const data = sample(6000, es, vd, vn);
+    const stat = mode => { let mis = 0, good = 0, want = 0; for (const d of data) { const r = decide(d, mode), act = r.g && r.c > cut[mode] ? r.g : 0;
+      if (act && act !== d.y) mis++; if (d.y) { want++; if (act === d.y) good++; } } return [mis / data.length, good / want]; };
+    const [me, ge] = stat("emg"), [ma, ga] = stat("agree");
+    $("out").innerHTML = [["EMG only: misfires", me, me > 0.05], ["Agree gate: misfires", ma, ma > 0.05], ["EMG only: correct grabs", ge], ["Agree gate: correct grabs", ga]]
+      .map(([l, v, bad]) => `<div class="stat"><b style="color:${bad === undefined ? "#e6edf3" : bad ? "#f85149" : "#3fb950"}">${(100 * v).toFixed(1)}%</b><br><span class="note">${l}</span></div>`).join("");
+  }
+  ["es", "vd", "vn"].forEach(id => $(id).addEventListener("input", run)); run();
+})();
+</script></body></html>

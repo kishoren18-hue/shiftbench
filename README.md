@@ -1,5 +1,7 @@
 # ShiftBench
 
+**Project page with live demos and results: https://shiftbench.vercel.app**
+
 **Do robot failure alarms keep their promise when the camera moves?**
 
 A world model watches a $240 SO-101 arm and raises an alarm when what happens
@@ -9,9 +11,7 @@ measures what happens to the promise when the lamp moves, the camera gets
 bumped, the table changes or a new object shows up, and provides an adaptive
 cutoff that keeps a stated guarantee under any of those.
 
-> **Status (Nov 2026): code complete and tested; no robot data yet.** Every
-> number in `results/synthetic/` comes from a toy latent world that checks
-> the code. They are not robot results and must not be reported as such.
+> **Status (Nov 2026):** code complete and tested; first offline results on real SO-101 video below; physical shift dataset not recorded yet.
 
 ## How it works
 
@@ -70,17 +70,21 @@ lerobot-rollout --strategy.type=base --duration=20 \
   --policy.path=$POLICY --task="Put the red cube in the bowl"
 ```
 
-## What the toy world says to expect (synthetic, not results)
+## First real-data results (Nov 2026, before the arm)
 
-![synthetic drift](results/synthetic/synthetic_drift.png)
+On public SO-101 footage (ArmnetBench, "eye drops into basket"), five frozen vision models, image-level shifts on
+identical episodes, target false-alarm rate 10%:
 
-At α = 5%, after a large lamp change the fixed cutoff false-alarmed on 100% of
-successful runs, and the log-scale adaptive cutoff on 6%. Recalibrating on 30
-reruns also works, but needs ≥ 19 successes among them: in the toy "new
-object" condition, too few succeeded in 88% of orderings, and it never alarmed.
-The cost of adapting is real too: once the cutoff rises to stop the false
-alarms, it misses more failures. The plot shows that, and the paper must
-report it.
+* **The promise can break.** A large camera bump pushed the fixed cutoff to **38%** false alarms with V-JEPA 2 and **71%**
+  with SigLIP 2. The adaptive cutoff stayed at **4–12.5%** for every model and every shift. Small shifts mostly didn't break it.
+* **But detection is the weak point.** AUROC 0.41–0.61 for every model: on this task, at 2 fps with 25 training demos,
+  the world model can barely tell failed runs from good ones, and conditioning on actions adds nothing.
+* **Demo:** a mid-run camera bump trips the alarm within 0.4 s; the untouched control never alarms.
+
+Small samples (24 successful test runs per condition). Details, caveats and what to change: `results/armnet_eyedrops/RESULTS.md`.
+Project page with interactive demos: see the link at the top of this README.
+
+The toy-world sanity run (synthetic, not results) is in `results/synthetic/`.
 
 ## Layout
 

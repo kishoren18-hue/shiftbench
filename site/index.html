@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShiftBench: do robot failure alarms survive a moved camera?</title>
+<meta name="description" content="A world model watches a $240 robot arm and raises an alarm when reality stops matching its prediction. ShiftBench tests whether the alarm's promised false-alarm rate survives everyday changes, and fixes it with an adaptive cutoff.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <p class="kicker">Kishore Nuthalapati · robotics × calibration · Nov 2026</p>
+    <h1>Do robot failure alarms survive a moved camera?</h1>
+    <p class="lede">A world model watches a cheap robot arm and raises an alarm when what happens stops matching what it predicted.
+      Published detectors promise a false-alarm rate, then test it in the same setup they calibrated in.
+      <b>ShiftBench</b> measures what happens to that promise when the lamp moves, the camera gets bumped or the table changes,
+      and fixes it with an adaptive cutoff that has a guarantee under <i>any</i> sequence of changes.</p>
+    <div class="links">
+      <a class="btn" href="https://github.com/kishoren18-hue/shiftbench">Code (GitHub)</a>
+      <a class="btn ghost" href="#results">Real-data results</a>
+      <a class="btn ghost" href="#play">Try it</a>
+      <a class="btn ghost" href="steadyhand2.html">SteadyHand 2 →</a>
+    </div>
+    <div id="headline" class="headline"></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section>
+  <h2>How it works</h2>
+  <div class="pipe">
+    <div class="box">camera frame</div><span>→</span>
+    <div class="box em">frozen vision model<br><small>V-JEPA 2 · DINOv2 · SigLIP 2 · CLIP · ResNet</small></div><span>→</span>
+    <div class="box">small predictor<br><small>+ joint state + commanded action</small></div><span>→</span>
+    <div class="box">surprise = |predicted − actual|</div><span>→</span>
+    <div class="box em">alarm if surprise &gt; cutoff</div>
+  </div>
+  <div class="cols">
+    <div><h3>Fixed cutoff (what papers do)</h3>
+      <p>Split conformal on successful runs: if a new good run looks like the calibration runs, it raises an alarm at most α of the time. The “if” is the problem: after a shift the new runs don't look like the old ones.</p></div>
+    <div><h3>Adaptive cutoff (the fix)</h3>
+      <p>After every successful run: <code>τ ← τ + η(alarm − α)</code>. On <i>any</i> sequence of runs,
+      false alarms / T ≤ α + (s<sub>max</sub> + η − τ<sub>1</sub>)/(ηT). Proved, and tested on adversarial sequences.
+      The cost: while it climbs, it catches fewer failures. We report both.</p></div>
+  </div>
+</section>
+
+<section id="play">
+  <h2>Try it: move the lamp</h2>
+  <p class="note">Simulated scores (not robot data), so you can see the mechanism. Runs 1–100 are normal; at run 100 the lamp moves and every run looks more “surprising”.</p>
+  <div class="controls">
+    <label>Shift size <input id="shift" type="range" min="0" max="1.2" step="0.05" value="0.6"><span id="shiftv"></span></label>
+    <label>Target false-alarm rate α <input id="alpha" type="range" min="0.02" max="0.2" step="0.01" value="0.05"><span id="alphav"></span></label>
+    <label>Step size η <input id="eta" type="range" min="0.2" max="3" step="0.1" value="1"><span id="etav"></span></label>
+    <button id="reroll" class="btn small">New random runs</button>
+  </div>
+  <canvas id="sim" width="960" height="420"></canvas>
+  <div id="simstats" class="stats"></div>
+</section>
+
+<section id="results">
+  <h2>Real robot data (before the arm arrives)</h2>
+  <p>ArmnetBench: public SO-101 footage, task <i>“put the eye drops into the basket”</i>, front camera, seven policies (ACT, Diffusion, SmolVLA, π0, π0.5, GR00T N1.7, MolmoAct 2) plus human teleop.
+     Five frozen vision models, three world-model variants, image-level shifts applied to the same episodes.
+     <span class="note">Image shifts are stand-ins: darkening pixels is not moving a lamp (no new shadows). The physical ShiftBench dataset is the real test.</span></p>
+  <div id="results-body"><p class="note">Results load from <code>results.json</code>.</p></div>
+</section>
+
+<section id="demo">
+  <h2>Replay demo: camera bumped mid-run</h2>
+  <p class="note">Recorded ArmnetBench footage with a simulated camera bump at 50%. The detector runs exactly as it would live. The robot in the video doesn't stop, because it's a recording; the grey frame marks where the watchdog <i>would</i> stop the arm.</p>
+  <div id="videos" class="videos"></div>
+</section>
+
+<section>
+  <h2>What's honest to claim</h2>
+  <ul>
+    <li><b>Not new:</b> world models detecting robot failures (FAIL-Detect, Foresight, FoMo-FD), or conformal thresholds for it.</li>
+    <li><b>New:</b> a controlled measurement of whether those thresholds keep their stated false-alarm rate under everyday shifts on a cheap reproducible arm; an adaptive cutoff with a finite-sample guarantee under any shift; and a public, shift-labeled dataset (recording now).</li>
+    <li><b>Limits:</b> results above use image stand-ins and one task. Recalibration needs ≥ 1/α − 1 successful reruns per new setting. Adapting costs detection while the cutoff climbs.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Hardware and next steps</h2>
+  <p>SO-101 arm (~$240 kit + printed parts), two webcams with locked exposure, a smart bulb, a tripod with tape marks. Protocol: 100 nominal shadow-mode rollouts, then 40 per shift condition, every condition reproducible from a written spec. See the <a href="https://github.com/kishoren18-hue/shiftbench/blob/main/docs/PROTOCOL.md">protocol</a> and <a href="https://github.com/kishoren18-hue/shiftbench/blob/main/docs/HARDWARE.md">parts list</a>.</p>
+</section>
+
+</main>
+<footer class="wrap"><p>Kishore Nuthalapati · <a href="https://github.com/kishoren18-hue">GitHub</a> · <a href="https://www.linkedin.com/in/knuthalapati">LinkedIn</a> · code MIT</p></footer>
+<script src="sim.js"></script>
+<script src="results.js"></script>
+</body>
+</html>
