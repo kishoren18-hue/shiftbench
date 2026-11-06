@@ -59,6 +59,9 @@ p.add_argument("--cache", default="/content/sb_cache")
 p.add_argument("--out", required=True)
 p.add_argument("--seed", type=int, default=0)
 p.add_argument("--dry_run", action="store_true", help="select episodes and print counts only")
+p.add_argument("--max_test_B", type=int, default=None, help="cap on experiment-B test episodes (random, seeded)")
+p.add_argument("--shard", default=None, help="i/n: encode only every n-th selected episode starting at i, then stop")
+p.add_argument("--encode_only", action="store_true", help="stop after encoding (use with --shard)")
 a = p.parse_args()
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -104,6 +107,9 @@ tele_train, tele_cal = tele.iloc[:n_tr], tele.iloc[n_tr:]
 pol_succ = pol[pol.success]
 calB = pol_succ.sample(frac=0.5, random_state=a.seed)
 testB = pol.drop(calB.index).sort_values("episode_index")
+if a.max_test_B and len(testB) > a.max_test_B:
+    testB = testB.sample(a.max_test_B, random_state=a.seed).sort_values("episode_index")
+    pol = pd.concat([calB, testB]).sort_values("episode_index")     # unused rollouts are dropped everywhere
 use = pd.concat([tele_train.assign(role="teleop_train"), tele_cal.assign(role="teleop_cal"),
                  pol.assign(role=np.where(pol.index.isin(calB.index), "policy_calB", "policy_testB"))])
 use.to_csv(out / "episodes.csv", index=False)
@@ -113,21 +119,32 @@ if a.dry_run:
     raise SystemExit(0)
 
 # ------------------------------------------------------------------ download + encode
-ds = meta if LOCAL else V3Dataset.download(a.repo_id, a.data_dir, episodes=use.episode_index.tolist(), cameras=(a.camera,))
-encoders = {}
-for e in encs:
-    t0 = time.time()
-    encoders[e] = make_encoder(e)
-    log(f"loaded {e} in {time.time() - t0:.0f}s")
+shifted_eps = set(testB.episode_index)            # image shifts only where they are tested
+if a.shard:
+    i_sh, n_sh = (int(v) for v in a.shard.split("/"))
+    use_enc = use.iloc[i_sh::n_sh]
+    log(f"shard {i_sh}/{n_sh}: {len(use_enc)} episodes")
+else:
+    use_enc = use
 
 
 def cpath(enc, shift, ei):
     return cache / enc / shift / f"ep_{ei:06d}.npz"
 
 
-shifted_eps = set(testB.episode_index)            # image shifts only where they are tested
+need = [int(r.episode_index) for r in use_enc.itertuples()
+        if any(not cpath(e, s, int(r.episode_index)).exists() for e in encs
+               for s in (shifts if int(r.episode_index) in shifted_eps else ["nominal"]))]
+log(f"{len(need)} episodes still to encode")
+ds = meta if (LOCAL or not need) else V3Dataset.download(a.repo_id, a.data_dir, episodes=need, cameras=(a.camera,))
+encoders = {}
+for e in (encs if need else []):
+    t0 = time.time()
+    encoders[e] = make_encoder(e)
+    log(f"loaded {e} in {time.time() - t0:.0f}s")
+
 t_start = time.time()
-for n, row in enumerate(use.itertuples()):
+for n, row in enumerate(use_enc.itertuples()):
     ei = int(row.episode_index)
     todo = [(e, s) for e in encs for s in (shifts if ei in shifted_eps else ["nominal"])
             if not cpath(e, s, ei).exists()]
@@ -144,8 +161,11 @@ for n, row in enumerate(use.itertuples()):
                     source="armnet").save(cpath(e, s, ei))
     if n % 10 == 0:
         el = time.time() - t_start
-        log(f"encoded {n + 1}/{len(use)} episodes ({el / 60:.1f} min)")
+        log(f"encoded {n + 1}/{len(use_enc)} episodes ({el / 60:.1f} min)")
 del encoders
+log(f"encoding finished in {(time.time() - t_start) / 60:.1f} min")
+if a.encode_only:
+    raise SystemExit(0)
 
 # ------------------------------------------------------------------ train, score, evaluate
 REF = 4

@@ -42,6 +42,7 @@ p.add_argument("--traces", default=None)
 p.add_argument("--shift", default="cam_bump_2")
 p.add_argument("--onset", type=float, default=0.5)
 p.add_argument("--n", type=int, default=3)
+p.add_argument("--fps", type=float, default=4.0, help="detector rate the world model was trained at")
 p.add_argument("--out", required=True)
 a = p.parse_args()
 out = Path(a.out)
@@ -64,7 +65,12 @@ W_IMG, W_PLOT, H = 640, 420, 360
 
 def render(frames, times, scores_t, scores, tau, onset_t, bumped, path, title):
     """frames at full rate; scores at detector ticks (times scores_t)."""
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W_IMG + W_PLOT}x{H}",
+    import shutil
+    ff = shutil.which("ffmpeg")
+    if ff is None:
+        import imageio_ffmpeg                       # pip install imageio-ffmpeg (bundles a binary)
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [ff, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W_IMG + W_PLOT}x{H}",
            "-r", "20", "-i", "-", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", "-preset", "veryfast", str(path)]
     pr = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     finite = [s for s in scores if s is not None and np.isfinite(s)]
@@ -111,7 +117,7 @@ for ei in eps:
     frames, ts = ds.episode_all_frames(ei, a.camera, max_side=640)
     ts = ts - ts[0]
     fps = 1 / np.median(np.diff(ts))
-    stride = max(1, round(fps / 4.0))
+    stride = max(1, round(fps / a.fps))
     d = ds.episode(ei, a.camera, target_fps=fps / stride)          # state/action on the same ticks
     tick = np.arange(0, len(frames), stride)[: len(d["state"])]
     for bumped in (True, False):
