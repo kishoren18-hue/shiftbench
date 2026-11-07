@@ -41,6 +41,7 @@ from shiftbench.encoders import make_encoder
 from shiftbench.lerobot_v3 import V3Dataset
 from shiftbench.perturb import SHIFTS, apply
 from shiftbench.scores import score_trace, episode_score
+from shiftbench.refscores import ReferenceBank
 
 p = argparse.ArgumentParser()
 p.add_argument("--repo_id", default="armnet/armnetbench_v01_lerobot_so101")
@@ -62,6 +63,8 @@ p.add_argument("--dry_run", action="store_true", help="select episodes and print
 p.add_argument("--max_test_B", type=int, default=None, help="cap on experiment-B test episodes (random, seeded)")
 p.add_argument("--shard", default=None, help="i/n: encode only every n-th selected episode starting at i, then stop")
 p.add_argument("--encode_only", action="store_true", help="stop after encoding (use with --shard)")
+p.add_argument("--variants", default="full,noaction,nochange,trajdev,endstate",
+               help="score variants: full/noaction/nochange (world model), trajdev/endstate (reference bank)")
 a = p.parse_args()
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -176,16 +179,30 @@ for e in encs:
 
     tr = [load(i) for i in tele_train.episode_index]
     cal = [load(i) for i in tele_cal.episode_index]
-    for variant in ("full", "noaction", "nochange"):
+    for variant in a.variants.split(","):
+        calB_v = calB                                     # calibration set for experiment B
         def prep(x):
             if variant == "noaction":
                 return Episode(z=x.z, state=np.zeros_like(x.state), action=np.zeros_like(x.action),
                                success=x.success, condition=x.condition, episode_index=x.episode_index, fps=x.fps, meta=x.meta)
             return x
 
+        errsB = None
         if variant == "nochange":
             mu_sd = np.concatenate([x.z for x in tr]).std(0) + 1e-6
             errs = lambda x: np.abs(np.diff(x.z, axis=0) / mu_sd).mean(1)
+        elif variant in ("trajdev", "endstate"):
+            # A: bank = teleop train demos. B: bank also gets half the successful policy runs,
+            # the other half calibrates (bank and calibration never overlap).
+            bankA = ReferenceBank(tr)
+            calB_v = calB.iloc[1::2]
+            bankB = ReferenceBank(tr + [load(i) for i in calB.iloc[0::2].episode_index])
+            if variant == "trajdev":
+                errs = lambda x, b=bankA: b.trajdev(x)
+                errsB = lambda x, b=bankB: b.trajdev(x)
+            else:
+                errs = lambda x, b=bankA: np.full(max(len(x.z), 1), b.endstate(x))
+                errsB = lambda x, b=bankB: np.full(max(len(x.z), 1), b.endstate(x))
         else:
             det = Detector(DetectorConfig(alpha=a.alpha, epochs=a.epochs)).fit([prep(x) for x in tr], [prep(x) for x in cal],
                                                                               verbose=False, seed=a.seed)
@@ -193,9 +210,10 @@ for e in encs:
             if variant == "full":
                 det.save(out / f"detector_{e}")               # teleop-calibrated, used by replay_demo.py
 
-        def scores(x):
-            er = errs(x)
+        def scores(x, f=None):
+            er = (f or errs)(x)
             return episode_score(score_trace(er, 4, None)), episode_score(score_trace(er, 4, REF)), er
+        errsB = errsB or errs
 
         cal_s = [scores(x) for x in cal]
         # ---- experiment A: policy shift (image nominal)
@@ -213,16 +231,16 @@ for e in encs:
         dfA.insert(0, "encoder", e)
         dfA.to_csv(out / f"table_A_{e}_{variant}.csv", index=False)
         # ---- experiment B: image shifts, paired episodes, calibrated on policy successes
-        calB_s = [scores(load(i)) for i in calB.episode_index]
+        calB_s = [scores(load(i), errsB) for i in calB_v.episode_index]
         condB = {}
         for s in shifts:
-            S = [scores(load(i, s)) for i in testB.episode_index]
+            S = [scores(load(i, s), errsB) for i in testB.episode_index]
             condB[s] = (np.array([x[0] for x in S]), np.array([x[1] for x in S]), testB.success.values)
             for (r0, r1, er), (_, rw) in zip(S, testB.iterrows()):
                 rows.append({"encoder": e, "variant": variant, "experiment": "B", "shift": s,
                              "condition": rw.policy_type, "episode_index": int(rw.episode_index), "success": bool(rw.success),
                              "score": r0, "score_ref": r1, "errors": er.astype(np.float32).tolist()})
-        for x, (_, rw) in zip(calB_s, calB.iterrows()):
+        for x, (_, rw) in zip(calB_s, calB_v.iterrows()):
             rows.append({"encoder": e, "variant": variant, "experiment": "B_cal", "shift": "nominal",
                          "condition": rw.policy_type, "episode_index": int(rw.episode_index), "success": True,
                          "score": x[0], "score_ref": x[1], "errors": x[2].astype(np.float32).tolist()})
